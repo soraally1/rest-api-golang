@@ -5,6 +5,7 @@ const API_BASE_URL = 'http://localhost:8080/api';
 let books = [];
 let currentEditingBook = null;
 let currentDeletingBook = null;
+let authToken = localStorage.getItem('book_api_token') || '';
 
 // DOM Elements
 const booksGrid = document.getElementById('booksGrid');
@@ -18,6 +19,13 @@ const modalTitle = document.getElementById('modalTitle');
 const submitBtn = document.getElementById('submitBtn');
 const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
 const deleteBookPreview = document.getElementById('deleteBookPreview');
+// Auth UI Elements
+const loginModal = document.getElementById('loginModal');
+const loginForm = document.getElementById('loginForm');
+const loginBtn = document.getElementById('loginBtn');
+const logoutBtn = document.getElementById('logoutBtn');
+const authStatus = document.getElementById('authStatus');
+const addBookBtn = document.getElementById('addBookBtn');
 
 // Stats Elements
 const totalBooksEl = document.getElementById('totalBooks');
@@ -28,6 +36,7 @@ const avgYearEl = document.getElementById('avgYear');
 document.addEventListener('DOMContentLoaded', function() {
     loadBooks();
     setupEventListeners();
+    updateAuthUI();
 });
 
 // Event Listeners
@@ -50,12 +59,17 @@ function setupEventListeners() {
     
     // Confirm delete
     confirmDeleteBtn.addEventListener('click', handleDeleteConfirm);
+
+    // Login form
+    loginForm.addEventListener('submit', handleLoginSubmit);
 }
 
 // API Functions
 async function fetchBooks() {
     try {
-        const response = await fetch(`${API_BASE_URL}/books`);
+        const response = await fetch(`${API_BASE_URL}/books`, {
+            headers: authHeaders()
+        });
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -74,6 +88,7 @@ async function createBook(bookData) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                ...authHeaders(),
             },
             body: JSON.stringify(bookData)
         });
@@ -97,6 +112,7 @@ async function updateBook(id, bookData) {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
+                ...authHeaders(),
             },
             body: JSON.stringify(bookData)
         });
@@ -117,7 +133,8 @@ async function updateBook(id, bookData) {
 async function deleteBook(id) {
     try {
         const response = await fetch(`${API_BASE_URL}/books/${id}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            headers: { ...authHeaders() }
         });
         
         const data = await response.json();
@@ -131,6 +148,28 @@ async function deleteBook(id) {
         console.error('Error deleting book:', error);
         throw error;
     }
+}
+
+// Auth APIs
+async function login(username, password) {
+    const resp = await fetch(`${API_BASE_URL}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) {
+        throw new Error(data.message || 'Login failed');
+    }
+    return data.token;
+}
+
+async function logout() {
+    if (!authToken) return;
+    await fetch(`${API_BASE_URL}/logout`, {
+        method: 'POST',
+        headers: { ...authHeaders() }
+    });
 }
 
 // UI Functions
@@ -260,6 +299,63 @@ function openDeleteModal(bookId) {
 function closeDeleteModal() {
     deleteModal.style.display = 'none';
     currentDeletingBook = null;
+}
+
+// Login Modal functions
+function openLoginModal() {
+    loginModal.style.display = 'block';
+    document.getElementById('username').focus();
+}
+
+function closeLoginModal() {
+    loginModal.style.display = 'none';
+    loginForm.reset();
+}
+
+async function handleLoginSubmit(e) {
+    e.preventDefault();
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value.trim();
+    const btn = document.getElementById('loginSubmitBtn');
+    try {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Logging in...';
+        const token = await login(username, password);
+        authToken = token;
+        localStorage.setItem('book_api_token', token);
+        showToast('Login successful', 'success');
+        closeLoginModal();
+        updateAuthUI();
+        await loadBooks();
+    } catch (err) {
+        showToast(err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Login';
+    }
+}
+
+async function handleLogout() {
+    try {
+        await logout();
+    } catch (_) {}
+    authToken = '';
+    localStorage.removeItem('book_api_token');
+    updateAuthUI();
+    await loadBooks();
+}
+
+function updateAuthUI() {
+    const loggedIn = !!authToken;
+    authStatus.textContent = loggedIn ? 'Logged in' : 'Not logged in';
+    loginBtn.style.display = loggedIn ? 'none' : 'inline-flex';
+    logoutBtn.style.display = loggedIn ? 'inline-flex' : 'none';
+    addBookBtn.disabled = !loggedIn;
+    addBookBtn.title = loggedIn ? '' : 'Login to add a book';
+}
+
+function authHeaders() {
+    return authToken ? { 'Authorization': `Bearer ${authToken}` } : {};
 }
 
 // Form Handling

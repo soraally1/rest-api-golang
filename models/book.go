@@ -30,6 +30,17 @@ type UpdateBookRequest struct {
 	TahunTerbit int    `json:"tahun_terbit,omitempty"`
 }
 
+// Config represents application configuration loaded from YAML
+type Config struct {
+	Users []User `yaml:"users"`
+}
+
+// User represents a simple user credential pair
+type User struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
 // NewBook creates a new Book instance
 func NewBook(req CreateBookRequest) *Book {
 	now := time.Now()

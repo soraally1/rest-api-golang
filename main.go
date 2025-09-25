@@ -4,18 +4,29 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"rest-api-golang/handlers"
+	"rest-api-golang/models"
 
 	"github.com/gorilla/mux"
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
 	// Create router
 	r := mux.NewRouter()
 
+	// Load users from config.yaml
+	users := loadUsersFromConfig()
+	handlers.LoadUsers(users)
+
 	// API routes
 	api := r.PathPrefix("/api").Subrouter()
+
+	// Auth routes
+	api.HandleFunc("/login", handlers.Login).Methods("POST")
+	api.HandleFunc("/logout", handlers.Logout).Methods("POST")
 
 	// Book routes
 	api.HandleFunc("/books", handlers.GetBooks).Methods("GET")
@@ -47,8 +58,9 @@ func main() {
 		})
 	}
 
-	// Apply CORS middleware
-	handler := corsHandler(r)
+	// Apply CORS and Auth middleware
+	secured := handlers.AuthMiddleware(r)
+	handler := corsHandler(secured)
 
 	// Start server
 	port := ":8080"
@@ -63,4 +75,22 @@ func main() {
 	fmt.Println()
 
 	log.Fatal(http.ListenAndServe(port, handler))
+}
+
+// loadUsersFromConfig reads users from config.yaml; returns empty if not found
+func loadUsersFromConfig() []models.User {
+	path := "config.yaml"
+	f, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Printf("⚠️  Could not read %s: %v\n", path, err)
+		return nil
+	}
+	var raw struct {
+		Users []models.User `yaml:"users"`
+	}
+	if err := yaml.Unmarshal(f, &raw); err != nil {
+		fmt.Printf("⚠️  Could not parse %s: %v\n", path, err)
+		return nil
+	}
+	return raw.Users
 }
