@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	"rest-api-golang/database"
 	"rest-api-golang/handlers"
 	"rest-api-golang/models"
 
@@ -13,13 +14,35 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// @title Book Management API
+// @version 1.0
+// @description A REST API for managing books with authentication
+// @host localhost:8080
+// @BasePath /api
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Type "Bearer" followed by a space and JWT token.
 func main() {
+	// Connect to database
+	if err := database.ConnectDatabase(); err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer database.CloseDatabase()
+
+	// Create tables and seed data
+	if err := database.CreateTables(); err != nil {
+		log.Fatalf("Failed to create tables: %v", err)
+	}
+	if err := database.SeedData(); err != nil {
+		log.Fatalf("Failed to seed data: %v", err)
+	}
+
+	// Initialize repositories
+	handlers.InitializeRepositories()
+
 	// Create router
 	r := mux.NewRouter()
-
-	// Load users from config.yaml
-	users := loadUsersFromConfig()
-	handlers.LoadUsers(users)
 
 	// API routes
 	api := r.PathPrefix("/api").Subrouter()
@@ -40,6 +63,94 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status": "healthy", "message": "Server is running"}`)
+	}).Methods("GET")
+
+	// API Documentation endpoint
+	r.HandleFunc("/docs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		html := `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Book Management API Documentation</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .endpoint { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .method { font-weight: bold; color: #007bff; }
+        .auth { color: #dc3545; font-weight: bold; }
+        .no-auth { color: #28a745; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>📚 Book Management API</h1>
+    <p>REST API for managing books with authentication</p>
+    
+    <h2>🔐 Authentication</h2>
+    <p>Most endpoints require a Bearer token. Login first to get a token.</p>
+    
+    <h2>📋 Endpoints</h2>
+    
+    <div class="endpoint">
+        <span class="method">POST</span> /api/login <span class="no-auth">(No Auth)</span><br>
+        <strong>Description:</strong> Login to get authentication token<br>
+        <strong>Body:</strong> {"username": "admin", "password": "admin123"}<br>
+        <strong>Response:</strong> {"success": true, "token": "..."}
+    </div>
+    
+    <div class="endpoint">
+        <span class="method">POST</span> /api/logout <span class="auth">(Auth Required)</span><br>
+        <strong>Description:</strong> Logout and revoke token<br>
+        <strong>Headers:</strong> Authorization: Bearer YOUR_TOKEN
+    </div>
+    
+    <div class="endpoint">
+        <span class="method">GET</span> /api/books <span class="auth">(Auth Required)</span><br>
+        <strong>Description:</strong> Get all books<br>
+        <strong>Headers:</strong> Authorization: Bearer YOUR_TOKEN
+    </div>
+    
+    <div class="endpoint">
+        <span class="method">POST</span> /api/books <span class="auth">(Auth Required)</span><br>
+        <strong>Description:</strong> Create a new book<br>
+        <strong>Headers:</strong> Authorization: Bearer YOUR_TOKEN<br>
+        <strong>Body:</strong> {"judul": "Book Title", "author": "Author Name", "tahun_terbit": 2024}
+    </div>
+    
+    <div class="endpoint">
+        <span class="method">GET</span> /api/books/{id} <span class="auth">(Auth Required)</span><br>
+        <strong>Description:</strong> Get book by ID<br>
+        <strong>Headers:</strong> Authorization: Bearer YOUR_TOKEN
+    </div>
+    
+    <div class="endpoint">
+        <span class="method">PUT</span> /api/books/{id} <span class="auth">(Auth Required)</span><br>
+        <strong>Description:</strong> Update book by ID<br>
+        <strong>Headers:</strong> Authorization: Bearer YOUR_TOKEN<br>
+        <strong>Body:</strong> {"judul": "New Title", "author": "New Author", "tahun_terbit": 2024}
+    </div>
+    
+    <div class="endpoint">
+        <span class="method">DELETE</span> /api/books/{id} <span class="auth">(Auth Required)</span><br>
+        <strong>Description:</strong> Delete book by ID<br>
+        <strong>Headers:</strong> Authorization: Bearer YOUR_TOKEN
+    </div>
+    
+    <div class="endpoint">
+        <span class="method">GET</span> /health <span class="no-auth">(No Auth)</span><br>
+        <strong>Description:</strong> Health check endpoint
+    </div>
+    
+    <h2>👥 Default Users</h2>
+    <ul>
+        <li><strong>Username:</strong> admin, <strong>Password:</strong> admin123</li>
+        <li><strong>Username:</strong> user, <strong>Password:</strong> user123</li>
+    </ul>
+    
+    <h2>🧪 Testing</h2>
+    <p>Use tools like Postman, Insomnia, or curl to test the API endpoints.</p>
+</body>
+</html>`
+		fmt.Fprint(w, html)
 	}).Methods("GET")
 
 	// CORS middleware
@@ -66,12 +177,15 @@ func main() {
 	port := ":8080"
 	fmt.Printf("🚀 Server starting on port %s\n", port)
 	fmt.Println("📚 Book API Endpoints:")
-	fmt.Println("  GET    /api/books       - Get all books")
-	fmt.Println("  POST   /api/books       - Create a new book")
-	fmt.Println("  GET    /api/books/{id}  - Get book by ID")
-	fmt.Println("  PUT    /api/books/{id}  - Update book by ID")
-	fmt.Println("  DELETE /api/books/{id}  - Delete book by ID")
+	fmt.Println("  POST   /api/login       - Login to get token")
+	fmt.Println("  POST   /api/logout      - Logout (requires token)")
+	fmt.Println("  GET    /api/books       - Get all books (requires token)")
+	fmt.Println("  POST   /api/books       - Create a new book (requires token)")
+	fmt.Println("  GET    /api/books/{id}  - Get book by ID (requires token)")
+	fmt.Println("  PUT    /api/books/{id}  - Update book by ID (requires token)")
+	fmt.Println("  DELETE /api/books/{id}  - Delete book by ID (requires token)")
 	fmt.Println("  GET    /health          - Health check")
+	fmt.Println("  GET    /docs            - API documentation")
 	fmt.Println()
 
 	log.Fatal(http.ListenAndServe(port, handler))

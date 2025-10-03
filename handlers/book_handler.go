@@ -7,30 +7,34 @@ import (
 	"strings"
 	"time"
 
+	"rest-api-golang/database"
 	"rest-api-golang/models"
+	"rest-api-golang/repositories"
 
 	"github.com/gorilla/mux"
+	"github.com/google/uuid"
 )
 
-// In-memory storage for books
-var books = make(map[string]*models.Book)
+// Repositories
+var bookRepo *repositories.BookRepository
+var userRepo *repositories.UserRepository
+var tokenRepo *repositories.TokenRepository
 
-// In-memory token store (token -> username)
-var activeTokens = make(map[string]string)
-
-// In-memory users loaded from config
-var usersFromConfig []models.User
-
-// LoadUsers sets configured users at startup
-func LoadUsers(users []models.User) {
-	usersFromConfig = users
+// InitializeRepositories initializes all repositories
+func InitializeRepositories() {
+	bookRepo = repositories.NewBookRepository(database.DB)
+	userRepo = repositories.NewUserRepository(database.DB)
+	tokenRepo = repositories.NewTokenRepository(database.DB)
 }
 
 // AuthMiddleware protects endpoints with Bearer token except excluded paths
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow login and health without token
-		if strings.HasPrefix(r.URL.Path, "/api/login") || strings.HasPrefix(r.URL.Path, "/health") {
+		// Allow login, health, and docs without token
+		if strings.HasPrefix(r.URL.Path, "/api/login") || 
+		   strings.HasPrefix(r.URL.Path, "/health") ||
+		   strings.HasPrefix(r.URL.Path, "/docs") ||
+		   strings.HasPrefix(r.URL.Path, "/swagger") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -53,7 +57,10 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			})
 			return
 		}
-		if _, ok := activeTokens[token]; !ok {
+
+		// Check token in database
+		_, err := tokenRepo.GetTokenByValue(token)
+		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": false,
@@ -61,6 +68,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			})
 			return
 		}
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -96,15 +104,9 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Simple auth check against config users
-	valid := false
-	for _, u := range usersFromConfig {
-		if u.Username == req.Username && u.Password == req.Password {
-			valid = true
-			break
-		}
-	}
-	if !valid {
+	// Get user from database
+	user, err := userRepo.GetUserByUsername(req.Username)
+	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
@@ -113,12 +115,43 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := randomToken()
-	activeTokens[token] = req.Username
+	// Simple password check (in production, use bcrypt)
+	if user.Password != req.Password {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Invalid username or password",
+		})
+		return
+	}
+
+	// Generate token
+	tokenValue := randomToken()
+	token := &models.Token{
+		ID:        uuid.New().String(),
+		Token:     tokenValue,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(24 * time.Hour), // 24 hours
+		CreatedAt: time.Now(),
+		IsRevoked: false,
+	}
+
+	// Save token to database
+	if err := tokenRepo.CreateToken(token); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Failed to create session",
+		})
+		return
+	}
+
+	// Update last login
+	userRepo.UpdateLastLogin(user.ID)
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
-		"token":   token,
+		"token":   tokenValue,
 	})
 }
 
@@ -145,8 +178,14 @@ func Logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := activeTokens[token]; ok {
-		delete(activeTokens, token)
+	// Revoke token in database
+	if err := tokenRepo.RevokeToken(token); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Token not found or already revoked",
+		})
+		return
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -159,16 +198,20 @@ func Logout(w http.ResponseWriter, r *http.Request) {
 func GetBooks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Convert map to slice
-	bookList := make([]*models.Book, 0, len(books))
-	for _, book := range books {
-		bookList = append(bookList, book)
+	books, err := bookRepo.GetAllBooks()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Failed to fetch books",
+		})
+		return
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
-		"data":    bookList,
-		"count":   len(bookList),
+		"data":    books,
+		"count":   len(books),
 	})
 }
 
@@ -179,8 +222,8 @@ func GetBook(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	book, exists := books[id]
-	if !exists {
+	book, err := bookRepo.GetBookByID(id)
+	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
@@ -220,7 +263,15 @@ func CreateBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	book := models.NewBook(req)
-	books[book.ID] = book
+	
+	if err := bookRepo.CreateBook(book); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Failed to create book",
+		})
+		return
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -237,8 +288,9 @@ func UpdateBook(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	book, exists := books[id]
-	if !exists {
+	// Get existing book
+	book, err := bookRepo.GetBookByID(id)
+	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
@@ -277,7 +329,15 @@ func UpdateBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	book.UpdatedAt = time.Now()
-	books[id] = book
+	
+	if err := bookRepo.UpdateBook(book); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Failed to update book",
+		})
+		return
+	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
@@ -293,8 +353,9 @@ func DeleteBook(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	book, exists := books[id]
-	if !exists {
+	// Get book before deletion for response
+	book, err := bookRepo.GetBookByID(id)
+	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
@@ -303,7 +364,15 @@ func DeleteBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	delete(books, id)
+	// Soft delete the book
+	if err := bookRepo.DeleteBook(id); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Failed to delete book",
+		})
+		return
+	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,

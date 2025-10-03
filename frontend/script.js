@@ -74,7 +74,8 @@ async function fetchBooks() {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        return data.success ? data.data : [];
+        console.log('API Response:', data); // Debug log
+        return data.success && data.data ? data.data : [];
     } catch (error) {
         console.error('Error fetching books:', error);
         showToast('Failed to load books', 'error');
@@ -152,16 +153,22 @@ async function deleteBook(id) {
 
 // Auth APIs
 async function login(username, password) {
-    const resp = await fetch(`${API_BASE_URL}/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-    });
-    const data = await resp.json();
-    if (!resp.ok || !data.success) {
-        throw new Error(data.message || 'Login failed');
+    try {
+        const resp = await fetch(`${API_BASE_URL}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        const data = await resp.json();
+        console.log('Login response:', data); // Debug log
+        if (!resp.ok || !data.success) {
+            throw new Error(data.message || 'Login failed');
+        }
+        return data.token;
+    } catch (error) {
+        console.error('Login error:', error);
+        throw error;
     }
-    return data.token;
 }
 
 async function logout() {
@@ -217,6 +224,12 @@ function displayBooks(booksToShow) {
 }
 
 function updateStats() {
+    // Add null check for books array
+    if (!books || !Array.isArray(books)) {
+        console.warn('Books array is null or not an array:', books);
+        books = [];
+    }
+    
     const totalBooks = books.length;
     const uniqueAuthors = new Set(books.map(book => book.author)).size;
     const avgYear = books.length > 0 
@@ -231,12 +244,18 @@ function updateStats() {
 function showLoading(show) {
     loadingSpinner.style.display = show ? 'block' : 'none';
     booksGrid.style.display = show ? 'none' : 'grid';
-    emptyState.style.display = show ? 'none' : (books.length === 0 ? 'block' : 'none');
+    emptyState.style.display = show ? 'none' : ((!books || books.length === 0) ? 'block' : 'none');
 }
 
 // Search Functionality
 function handleSearch() {
     const searchTerm = searchInput.value.toLowerCase().trim();
+    
+    // Add null check for books array
+    if (!books || !Array.isArray(books)) {
+        console.warn('Books array is null or not an array in search:', books);
+        books = [];
+    }
     
     if (searchTerm === '') {
         displayBooks(books);

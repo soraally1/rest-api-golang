@@ -8,12 +8,13 @@ import (
 
 // Book represents a book entity
 type Book struct {
-	ID          string    `json:"id"`
-	Judul       string    `json:"judul"`
-	Author      string    `json:"author"`
-	TahunTerbit int       `json:"tahun_terbit"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string     `json:"id" db:"id"`
+	Judul       string     `json:"judul" db:"judul"`
+	Author      string     `json:"author" db:"author"`
+	TahunTerbit int        `json:"tahun_terbit" db:"tahun_terbit"`
+	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
+	DeletedAt   *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`
 }
 
 // CreateBookRequest represents the request payload for creating a book
@@ -37,8 +38,15 @@ type Config struct {
 
 // User represents a simple user credential pair
 type User struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	ID        string     `json:"id" db:"id"`
+	Username  string     `json:"username" yaml:"username" db:"username"`
+	Password  string     `json:"-" yaml:"password" db:"password"`
+	Email     string     `json:"email" db:"email"`
+	Role      string     `json:"role" db:"role"`
+	IsActive  bool       `json:"is_active" db:"is_active"`
+	CreatedAt time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at" db:"updated_at"`
+	LastLogin *time.Time `json:"last_login,omitempty" db:"last_login"`
 }
 
 // NewBook creates a new Book instance
